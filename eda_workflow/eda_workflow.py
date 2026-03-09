@@ -220,26 +220,118 @@ def make_eda_baseline_workflow(
         }
     
     def compute_aggregates_node(state: EDAState):
-        """Compute group-by aggregates on key columns.
-        
-        TODO: Implement this analysis tool.
-        
-        See profile_dataset_node and analyze_missingness_node for reference.
-        Store your results in results["compute_aggregates"] and return
-        {"current_step": "compute_aggregates", "results": results}.
-        """
+        """Compute aggregates (mean, median, min, max, std) for each numeric column."""
         logger.info("Computing aggregates")
+        df = pd.DataFrame.from_dict(state.get("dataframe"))
+        results = state.get("results", {})
+
+        numeric_cols = df.select_dtypes(include=["number"]).columns.tolist()
+        aggregations = {}
+
+        for col in numeric_cols:
+            series = df[col].dropna()
+            if len(series) == 0:
+                aggregations[col] = {
+                    "mean": None,
+                    "median": None,
+                    "min": None,
+                    "max": None,
+                    "std": None,
+                }
+                continue
+            mean_val = series.mean()
+            median_val = series.median()
+            min_val = series.min()
+            max_val = series.max()
+            std_val = series.std()
+
+            def _to_native(x):
+                if pd.isna(x):
+                    return None
+                return float(x) if isinstance(x, (float, int)) else x
+
+            aggregations[col] = {
+                "mean": _to_native(mean_val),
+                "median": _to_native(median_val),
+                "min": _to_native(min_val),
+                "max": _to_native(max_val),
+                "std": _to_native(std_val),
+            }
+
+        results["aggregates_analysis"] = {"aggregations": aggregations}
+
+        return {
+            "current_step": "aggregates_analysis",
+            "results": results,
+        }
     
     def analyze_relationships_node(state: EDAState):
-        """Analyze relationships between variables.
-        
-        TODO: Implement this analysis tool.
-        
-        See profile_dataset_node and analyze_missingness_node for reference.
-        Store your results in results["analyze_relationships"] and return
-        {"current_step": "analyze_relationships", "results": results}.
-        """
+        """Analyze relationships between variables: numeric correlation, cat vs numeric, cat vs cat."""
         logger.info("Analyzing relationships")
+        df = pd.DataFrame.from_dict(state.get("dataframe"))
+        results = state.get("results", {})
+
+        numeric_cols = df.select_dtypes(include=["number"]).columns.tolist()
+        categorical_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
+
+        def _to_native(x):
+            if pd.isna(x):
+                return None
+            try:
+                f = float(x)
+                return int(f) if f == int(f) else f
+            except (ValueError, TypeError):
+                return x
+
+        def _dict_to_native(d):
+            if isinstance(d, dict):
+                return {k: _dict_to_native(v) for k, v in d.items()}
+            if isinstance(d, (list, tuple)):
+                return [_dict_to_native(v) for v in d]
+            return _to_native(d)
+
+        # Numeric vs numeric: correlation matrix
+        numeric_correlation = {}
+        if len(numeric_cols) >= 2:
+            corr_df = df[numeric_cols].corr()
+            raw = corr_df.to_dict()
+            numeric_correlation = _dict_to_native(raw)
+
+        # Categorical vs numeric: group means (and counts) per group
+        categorical_vs_numeric = {}
+        for cat_col in categorical_cols:
+            categorical_vs_numeric[cat_col] = {}
+            for num_col in numeric_cols:
+                try:
+                    group_means = df.groupby(cat_col, dropna=False)[num_col].mean()
+                    group_counts = df.groupby(cat_col, dropna=False)[num_col].count()
+                    categorical_vs_numeric[cat_col][num_col] = {
+                        "mean_by_group": _dict_to_native(group_means.to_dict()),
+                        "count_by_group": _dict_to_native(group_counts.to_dict()),
+                    }
+                except (KeyError, TypeError):
+                    categorical_vs_numeric[cat_col][num_col] = None
+
+        # Categorical vs categorical: crosstabs
+        categorical_crosstabs = {}
+        for i, c1 in enumerate(categorical_cols):
+            for c2 in categorical_cols[i + 1 :]:  # upper triangle only
+                try:
+                    ct = pd.crosstab(df[c1], df[c2], dropna=False)
+                    categorical_crosstabs[f"{c1}_vs_{c2}"] = _dict_to_native(ct.to_dict())
+                except (KeyError, TypeError):
+                    categorical_crosstabs[f"{c1}_vs_{c2}"] = None
+
+        results["analyze_relationships"] = {
+            "numeric_correlation": numeric_correlation,
+            "categorical_vs_numeric": categorical_vs_numeric,
+            "categorical_crosstabs": categorical_crosstabs,
+        }
+
+        return {
+            "current_step": "analyze_relationships",
+            "results": results,
+        }
     
     def extract_observations_node(state: EDAState):
         """Extract observations from the latest analysis results using LLM."""
