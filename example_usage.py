@@ -48,7 +48,7 @@ results = workflow.get_results()
 analysis_steps = [
     ("profile_dataset", "Dataset Profile"),
     ("analyze_missingness", "Missingness Analysis"),
-    ("compute_aggregates", "Aggregates Analysis"),
+    ("aggregates_analysis", "Aggregates Analysis"),
     ("analyze_relationships", "Relationships Analysis"),
 ]
 
