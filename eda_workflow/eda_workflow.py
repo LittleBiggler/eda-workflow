@@ -266,7 +266,7 @@ def make_eda_baseline_workflow(
         }
     
     def analyze_relationships_node(state: EDAState):
-        """Analyze relationships between variables: numeric correlation, cat vs numeric, cat vs cat."""
+        """Analyze relationships: correlations with |r| >= 0.50, crosstabs at most 5x5."""
         logger.info("Analyzing relationships")
         df = pd.DataFrame.from_dict(state.get("dataframe"))
         results = state.get("results", {})
@@ -290,41 +290,29 @@ def make_eda_baseline_workflow(
                 return [_dict_to_native(v) for v in d]
             return _to_native(d)
 
-        # Numeric vs numeric: correlation matrix
+        # Numeric vs numeric: only correlations with |r| >= 0.50 (exclude diagonal)
         numeric_correlation = {}
         if len(numeric_cols) >= 2:
             corr_df = df[numeric_cols].corr()
-            raw = corr_df.to_dict()
-            numeric_correlation = _dict_to_native(raw)
+            for i, c1 in enumerate(numeric_cols):
+                for c2 in numeric_cols[i + 1 :]:  # upper triangle only, skip diagonal
+                    r = corr_df.loc[c1, c2]
+                    if pd.notna(r) and abs(r) >= 0.50:
+                        numeric_correlation[f"{c1}_vs_{c2}"] = _to_native(r)
 
-        # Categorical vs numeric: group means (and counts) per group
-        categorical_vs_numeric = {}
-        for cat_col in categorical_cols:
-            categorical_vs_numeric[cat_col] = {}
-            for num_col in numeric_cols:
-                try:
-                    group_means = df.groupby(cat_col, dropna=False)[num_col].mean()
-                    group_counts = df.groupby(cat_col, dropna=False)[num_col].count()
-                    categorical_vs_numeric[cat_col][num_col] = {
-                        "mean_by_group": _dict_to_native(group_means.to_dict()),
-                        "count_by_group": _dict_to_native(group_counts.to_dict()),
-                    }
-                except (KeyError, TypeError):
-                    categorical_vs_numeric[cat_col][num_col] = None
-
-        # Categorical vs categorical: crosstabs
+        # Categorical vs categorical: only crosstabs with at most 5x5
         categorical_crosstabs = {}
         for i, c1 in enumerate(categorical_cols):
-            for c2 in categorical_cols[i + 1 :]:  # upper triangle only
+            for c2 in categorical_cols[i + 1 :]:
                 try:
                     ct = pd.crosstab(df[c1], df[c2], dropna=False)
-                    categorical_crosstabs[f"{c1}_vs_{c2}"] = _dict_to_native(ct.to_dict())
+                    if ct.shape[0] <= 5 and ct.shape[1] <= 5:
+                        categorical_crosstabs[f"{c1}_vs_{c2}"] = _dict_to_native(ct.to_dict())
                 except (KeyError, TypeError):
-                    categorical_crosstabs[f"{c1}_vs_{c2}"] = None
+                    pass
 
         results["analyze_relationships"] = {
             "numeric_correlation": numeric_correlation,
-            "categorical_vs_numeric": categorical_vs_numeric,
             "categorical_crosstabs": categorical_crosstabs,
         }
 
